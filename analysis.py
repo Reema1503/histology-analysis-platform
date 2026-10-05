@@ -26,7 +26,15 @@ def count_candidates(rgb, options):
     crop = rgb[y0:y1, x0:x1]
     blue = crop[:, :, 2].astype(float)
     green = crop[:, :, 1].astype(float)
+    red = crop[:, :, 0].astype(float)
     blue_smooth = ndi.gaussian_filter(blue, 1)
+    # Identify blue-dominant nuclear pixels, not just any signal in RGB blue.
+    # Ratios are adjustable because bright overlapping Iba1 may affect RGB hues.
+    dominance = float(options.get('blue_dominance', 1.2))
+    min_contrast = float(options.get('min_blue_contrast', 15))
+    background = ndi.median_filter(blue, size=21)
+    dapi_support = ((blue > dominance * np.maximum(green, red)) &
+                    (blue - background >= min_contrast))
     auto = otsu(blue_smooth)
     bt = auto if options.get('auto_blue', True) else float(options['blue_threshold'])
     gt = float(options.get('green_threshold', 30))
@@ -34,9 +42,9 @@ def count_candidates(rgb, options):
     maximum = int(options.get('max_area', 1500))
     radius = int(options.get('radius', 5))
     fraction = float(options.get('positive_fraction', 0.15))
-    if not (0 <= bt <= 255 and 0 <= gt <= 255 and 1 <= minimum <= maximum and 1 <= radius <= 30 and 0 <= fraction <= 1):
+    if not (0 <= bt <= 255 and 0 <= gt <= 255 and 1 <= minimum <= maximum and 1 <= radius <= 30 and 0 <= fraction <= 1 and 1 <= dominance <= 3 and 0 <= min_contrast <= 255):
         raise ValueError('Invalid detection parameters.')
-    mask = ndi.binary_fill_holes(blue_smooth > bt)
+    mask = ndi.binary_fill_holes((blue_smooth > bt) & dapi_support)
     labels, _ = ndi.label(mask)
     objects = ndi.find_objects(labels)
     cells = []
@@ -45,6 +53,10 @@ def count_candidates(rgb, options):
             continue
         area = int(np.count_nonzero(labels[sl] == label_id))
         if not minimum <= area <= maximum:
+            continue
+        nuclear_pixels = labels[sl] == label_id
+        supported = nuclear_pixels & dapi_support[sl]
+        if np.count_nonzero(supported) < minimum:
             continue
         sy = slice(max(0, sl[0].start-radius), min(crop.shape[0], sl[0].stop+radius))
         sx = slice(max(0, sl[1].start-radius), min(crop.shape[1], sl[1].stop+radius))
@@ -57,9 +69,15 @@ def count_candidates(rgb, options):
         if positive < fraction:
             continue
         yy, xx = np.nonzero(labels[sl] == label_id)
-        cells.append({'id': len(cells)+1, 'x': float(xx.mean()+sl[1].start+x0),
-                      'y': float(yy.mean()+sl[0].start+y0), 'nuclear_area_px': area,
+        # Anchor the overlay to an actual supported DAPI pixel nearest the centroid.
+        syy, sxx = np.nonzero(supported)
+        nearest = np.argmin((sxx-xx.mean())**2 + (syy-yy.mean())**2)
+        cells.append({'id': len(cells)+1, 'x': float(sxx[nearest]+sl[1].start+x0),
+                      'y': float(syy[nearest]+sl[0].start+y0), 'nuclear_area_px': area,
+                      'mean_blue_nucleus': float(blue[sl][supported].mean()),
+                      'mean_blue_contrast': float((blue[sl]-background[sl])[supported].mean()),
                       'mean_green_ring': float(signal.mean()), 'positive_fraction': positive,
                       'source': 'automatic_candidate'})
     return {'cells': cells, 'blue_threshold': bt, 'roi_area_px': int(crop.shape[0]*crop.shape[1]),
-            'method': 'DAPI connected components with Iba1-positive nuclear surrounds'}
+            'method': 'Blue-dominant, locally contrasted DAPI components with Iba1-positive nuclear surrounds',
+            'method_version': '0.2'}
