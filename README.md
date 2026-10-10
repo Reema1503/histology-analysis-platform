@@ -1,6 +1,6 @@
-# Histology Workbench
+# IF Workbench 
 
-A runnable website prototype for Iba1/DAPI fluorescence candidate-cell screening and manual H&E lung-region measurement. This is classical image processing, not a trained AI model. It does not implement automatic lung-metastasis identification.
+Improve Iba1 soma detection and add folder batch analysis
 
 ## Run on Windows
 
