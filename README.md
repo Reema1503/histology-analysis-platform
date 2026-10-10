@@ -1,6 +1,6 @@
-# IF Workbench 
+# Histology Workbench
 
-Improve Iba1 soma detection and add folder batch analysis
+A runnable website prototype for Iba1/DAPI fluorescence candidate-cell screening and manual H&E lung-region measurement. This is classical image processing, not a trained AI model. It does not implement automatic lung-metastasis identification.
 
 ## Run on Windows
 
@@ -43,3 +43,9 @@ This prototype has no authentication or project database. Files are processed in
 ## Limits
 
 25 MB per image, 16 megapixels, one frame, 8-bit image. Browser uploads are sent to the hosting server for decoding and counting. TIFF label/metadata is not used for channel assignment or calibration. Repeated polygon area measurement may be slow for large fields. Exported overlays reflect current zoom and display adjustments; numeric analysis uses original resolution.
+
+## Version 0.2: stricter DAPI screening
+
+Nuclear candidates must now contain blue-dominant pixels with signal above a local median background. New adjustable controls: minimum DAPI contrast (default 15 intensity units) and blue/other-colour ratio (default 1.2). Markers are anchored within supported nuclear pixels. CSV exports include nuclear blue intensity and local contrast. These settings may reject true cells with dim DAPI or strong overlapping green fluorescence. Review DAPI-only overlays and tune on annotated examples; defaults are not validated biological thresholds.
+
+To update the hosted website, replace analysis.py and index.html in the existing GitHub repository, commit, and deploy the latest commit on Render. No dependency or Dockerfile changes are needed.

@@ -1,3 +1,6 @@
-numpy>=2.0,<3
-scipy>=1.14,<2
-Pillow>=11,<13
+numpy>=1.26
+scipy>=1.11
+Pillow>=10
+tifffile>=2024.1
+scikit-image>=0.23
+imagecodecs>=2024.1
