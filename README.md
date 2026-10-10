@@ -1,51 +1,87 @@
 # Histology Workbench
 
-A runnable website prototype for Iba1/DAPI fluorescence candidate-cell screening and manual H&E lung-region measurement. This is classical image processing, not a trained AI model. It does not implement automatic lung-metastasis identification.
+A local, browser-based tool for **reviewing Iba1/DAPI immunofluorescence images** and counting candidate microglial somata. It uses classical image processing (NumPy, SciPy, scikit-image). It is **not** a trained machine-learning model.
 
-## Run on Windows
+Automatic detections are *staining-based candidates*, not validated microglial identities. Every count is meant to be confirmed by manual review.
 
-Extract this folder, open it in VS Code, and open a PowerShell terminal:
+## Features
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe app.py
+- **Soma-candidate detection** on the Iba1 (green) channel:
+  - Gaussian background correction
+  - robust MAD-based thresholding
+  - morphological opening to suppress thin processes
+  - distance-transform / h-maxima watershed to split touching somata, with saddle-ratio merging of over-split cells
+- **DAPI association**: each candidate is linked to nearby nuclei (centre-to-footprint distance).
+- **Automatic review flags**: `small_soma`, `large_or_merged_soma`, `elongated_region`, `no_nearby_DAPI`, `multiple_nearby_nuclei`, `weak_green_support`, `shared_DAPI_review_split`.
+- **Manual review in the browser**: accept, reject, add, move, undo (100 steps), border-cell rule, optional ROI, "finish review of this image".
+- **Folder / batch workflow**: analyse many images with shared settings; export a batch summary (CSV/JSON/ZIP).
+- **Exports**: per-image cell CSV, annotated PNG, review session JSON (SHA-256 checked on restore).
+- **Validation**: compare candidates with a *complete* reference annotation (one-to-one Hungarian matching) to report precision, recall, missed cells and duplicate-like extras.
+- **Reproducibility**: settings, intensity scales, thresholds and method version (`1.0-soma-review`) are saved with every result.
+
+## Install and run
+
+Requires Python 3.10+.
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate      macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python app.py
 ```
 
-Open http://127.0.0.1:8501 in your browser. Keep the terminal running. Ctrl+C stops it.
+Open <http://127.0.0.1:8501> (set a different port with the `PORT` environment variable). Keep the terminal open; Ctrl+C stops the server. The server listens on `127.0.0.1` only, and images are held in memory (max 3 active) and not written to disk. Restarting the server erases them.
 
-## Microglia workflow
+## Command-line batch counting
 
-1. Choose Iba1 / DAPI microglia and upload a single 8-bit RGB TIFF, PNG or JPG. Green must represent Iba1, blue DAPI. Raw channels, 16-bit images, stacks and whole slides need a separate importer.
-2. Set an analysis rectangle excluding labels and the scale bar. Enter pixel size if independently known; the application does not infer it from an embedded scale bar.
-3. Adjust brightness, contrast, gamma and channel visibility for viewing. Analysis always uses original pixels.
-4. Detect candidates. The baseline thresholds the smoothed DAPI channel, finds connected nuclear components, filters by area, and checks Iba1-positive pixels in a surrounding ring.
-5. Review the overlay. Add missed candidates or remove false positives. Save CSV, settings and the display overlay.
+```bash
+python batch_count.py            # opens a folder picker
+python batch_count.py path/to/folder
+```
 
-Defaults are starting parameters, not calibrated assay thresholds. Touching nuclei may merge. Nearby Iba1 processes may be incorrectly associated with other nuclei. Weak staining may be missed. Iba1-positive cells are not automatically proven microglia; interpretation depends on tissue and assay context. Density uses rectangular ROI area, not segmented tissue area. Adjusting detection parameters does not update existing results until detection is run again.
+Writes a timestamped `batch_results_*` folder containing, per image, `*.cells.csv` and `*.settings.json`, plus `summary.csv`. The "final reviewed count" column stays **blank until manual review**. Default trial setting: `core_radius = 4`; edit `OPTIONS` in the script.
 
-## Lung H&E workflow
+## Input requirements
 
-Upload a genuine H&E image. Outline lung tissue using the polygon tool and finish each polygon. Outline tumour regions similarly. The app computes the union of tumour pixels inside the union of outlined tissue pixels within the ROI, avoiding overlap double-counting. Tumour region count is the number of annotations, not an automatically validated lesion count. Save settings to retain polygon coordinates.
+- One 2D field per file: multichannel TIFF (`YXS`, `YXC`, `CYX`, `SYX`) or RGB/RGBA PNG/JPG/WebP.
+- Choose which channel is Iba1 and which is DAPI (RGB default: green = 1, blue = 2).
+- Limits: 100 MB per file, 16 megapixels. Z/T stacks, multi-series TIFFs and grayscale-only files are rejected.
+- Pixel size is **not inferred**; enter a verified value if you need physical units.
+- Compressed exports (JPEG/WebP) are for demonstration only. Use original acquisition files for analysis.
 
-Next development step: obtain representative H&E images and expert region annotations, develop a segmentation model, and evaluate it on held-out biological samples. No automatic lesion count is reported by this version.
+## Main settings
 
-## Validate before using measurements
+| Setting | Default | Meaning |
+|---|---|---|
+| `green_sensitivity` | 65 | Iba1 threshold sensitivity |
+| `background_sigma` / `background_strength` | 15 / 1 | Background subtraction |
+| `min_soma_area` / `max_soma_area` | 18 / 1800 px | Size flags |
+| `core_radius` | 3 | Opening radius (removes processes) |
+| `split_prominence` / `merge_saddle` | 1.5 / 0.75 | Watershed split / merge control |
+| `dapi_sensitivity`, `min_nucleus_area` | 55, 5 | Nucleus detection |
+| `association_distance` | 6 px | Max soma–nucleus distance |
 
-Compare marked detections with blinded manual annotations; assess missed cells and false detections, not just total-count agreement. Include different staining intensities, background levels and cell densities. Freeze parameters before evaluating held-out images, splitting by animal/patient rather than adjacent image fields. No accuracy claims are established by this prototype.
+Defaults are starting points, not calibrated assay thresholds.
 
-## Host as a separate Render website
+## Limitations
 
-Create a new GitHub repository and upload these files at the root. In Render create a new Web Service from that repository and use the included Dockerfile. The server binds to 0.0.0.0 inside Docker and reads Render's PORT environment variable. Do not replace the existing OncoVista repository.
+- Broad Gaussian background subtraction can remove large, dim somata.
+- Dense clusters may be merged or over-split; dim staining may be missed.
+- Iba1-positive objects are not proven to be microglia without tissue/assay context.
+- Precision/recall are meaningful only on fully annotated fields or ROIs. No accuracy claims are made for this prototype.
+- For rigorous use, freeze parameters first, then evaluate on held-out samples split by animal, not by adjacent fields.
+- No authentication or persistent storage. Intended for single-user, local use.
 
-This prototype has no authentication or project database. Files are processed in memory and not written to disk. Uploaded data and results disappear on refresh unless exported. Keep access restricted; do not expose confidential images publicly. Add authentication, access controls and persistent project storage before shared use.
+## Files
 
-## Limits
+| File | Purpose |
+|---|---|
+| `app.py` | Local HTTP server, image decoding, export |
+| `analysis.py` | Detection and validation logic |
+| `batch_count.py` | Folder batch script |
+| `index.html` | Browser interface |
+| `requirements.txt` | Dependencies |
 
-25 MB per image, 16 megapixels, one frame, 8-bit image. Browser uploads are sent to the hosting server for decoding and counting. TIFF label/metadata is not used for channel assignment or calibration. Repeated polygon area measurement may be slow for large fields. Exported overlays reflect current zoom and display adjustments; numeric analysis uses original resolution.
+## Author
 
-## Version 0.2: stricter DAPI screening
-
-Nuclear candidates must now contain blue-dominant pixels with signal above a local median background. New adjustable controls: minimum DAPI contrast (default 15 intensity units) and blue/other-colour ratio (default 1.2). Markers are anchored within supported nuclear pixels. CSV exports include nuclear blue intensity and local contrast. These settings may reject true cells with dim DAPI or strong overlapping green fluorescence. Review DAPI-only overlays and tune on annotated examples; defaults are not validated biological thresholds.
-
-To update the hosted website, replace analysis.py and index.html in the existing GitHub repository, commit, and deploy the latest commit on Render. No dependency or Dockerfile changes are needed.
+Reema Chowdhury, Ph.D. (Neuroscience)
