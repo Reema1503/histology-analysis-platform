@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import numpy as np
 import tifffile
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from analysis import count_candidates, evaluate_points
 
 ROOT = Path(__file__).parent
@@ -75,6 +75,38 @@ def decode_image(encoded, green_channel=1, blue_channel=2):
     return rgb, meta
 
 
+def annotated_png(a, review):
+    """Full-resolution display export. Never changes the original channel array."""
+    original = Image.fromarray(display(a))
+    image = Image.new('RGB', (original.width, original.height+40), 'black')
+    image.paste(original, (0, 0)); draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=12)
+    h, w = a.shape[:2]; cells = review.get('cells', [])
+    if len(cells) > 100000: raise ValueError('Too many markers for export.')
+    roi = review.get('settings') or dict(x0=0, y0=0, x1=w, y1=h)
+    final = 0
+    for c in cells:
+        x, y = float(c['x']), float(c['y'])
+        if not np.isfinite(x+y) or not 0 <= x < w or not 0 <= y < h:
+            raise ValueError('Export marker outside original image.')
+        state = c['review_status']
+        colour = '#ff747b' if state == 'rejected' else '#55e6c2' if state == 'accepted' else '#c595ff' if c.get('border') else '#ff9d42' if c.get('uncertain') else '#ffe05a'
+        if review.get('outlines', True):
+            for ex, ey in c.get('boundary_px', []):
+                if 0 <= ex < w and 0 <= ey < h: draw.point((ex, ey), fill=colour)
+        draw.ellipse((x-5, y-5, x+5, y+5), outline=colour, width=1)
+        if state == 'rejected':
+            draw.line((x-5,y-5,x+5,y+5),fill=colour,width=1)
+            draw.line((x-5,y+5,x+5,y-5),fill=colour,width=1)
+        draw.text((x+7,y-8),str(c['id']),font=font,fill=colour,stroke_width=1,stroke_fill='black')
+        if state == 'accepted' and (not c.get('border') or review.get('include_border')) and roi['x0'] <= x < roi['x1'] and roi['y0'] <= y < roi['y1']: final += 1
+    complete = review.get('review_complete', False)
+    text = f"{'Final reviewed' if complete else 'Accepted (incomplete)'}: {final}"
+    draw.text((5,h+3),text,font=font,fill='white')
+    draw.text((5,h+21),f"Border included: {bool(review.get('include_border'))}",font=font,fill='white')
+    buf = io.BytesIO(); image.save(buf,format='PNG'); return buf.getvalue()
+
+
 class Handler(BaseHTTPRequestHandler):
     def send(self, status, data, kind='application/json'):
         body = data if isinstance(data, bytes) else json.dumps(data, allow_nan=False).encode()
@@ -110,6 +142,9 @@ class Handler(BaseHTTPRequestHandler):
                     else: p = np.clip(data/max(float(np.percentile(data, 99.9)), 1e-12)*255, 0, 255).astype(np.uint8)
                     previews[name] = png(p)
                 result['previews'] = previews; self.send(200, result)
+            elif self.path == '/api/export-image':
+                a, _ = decode_image(r['image'], r.get('green_channel', 1), r.get('blue_channel', 2))
+                self.send(200, annotated_png(a, r['review']), 'image/png')
             elif self.path == '/api/validate':
                 tolerance = float(r.get('tolerance', 8))
                 if not 0 < tolerance <= 100: raise ValueError('Match distance must be 0–100 px.')
